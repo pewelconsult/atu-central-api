@@ -1,4 +1,4 @@
-// services/emailService.js - Fixed for Nodemailer v7+
+// services/emailService.js - Fixed for Nodemailer v7+ with proper error handling
 const nodemailer = require('nodemailer');
 
 class EmailService {
@@ -12,7 +12,6 @@ class EmailService {
     try {
       console.log('🔧 Initializing email transporter (Nodemailer v7+)...');
       
-      // Check for your specific environment variable names
       const smtpUser = process.env.SMTP_USER;
       const smtpPassword = process.env.SMTP_PASSWORD;
       const smtpHost = process.env.SMTP_HOST;
@@ -26,12 +25,11 @@ class EmailService {
         return;
       }
 
-      // In Nodemailer v7+, use the "gmail" service for better compatibility
       this.transporter = nodemailer.createTransport({
-        service: "gmail", // Use Gmail service instead of manual SMTP config
+        service: "gmail",
         auth: {
           user: smtpUser,
-          pass: smtpPassword // This should be your Gmail App Password
+          pass: smtpPassword
         }
       });
 
@@ -40,7 +38,6 @@ class EmailService {
       console.log(`📧 SMTP Host: ${smtpHost}`);
       console.log(`📧 SMTP User: ${smtpUser}`);
 
-      // Verify connection configuration
       this.verifyConnection();
     } catch (error) {
       console.error('❌ Email service initialization failed:', error.message);
@@ -57,7 +54,6 @@ class EmailService {
     } catch (error) {
       console.error('❌ Email server connection failed:', error.message);
       
-      // Provide helpful error messages for common issues
       if (error.message.includes('Service not available')) {
         console.log('💡 Gmail SMTP might be temporarily unavailable. Try again in a few minutes.');
       } else if (error.message.includes('Invalid login')) {
@@ -71,7 +67,23 @@ class EmailService {
     }
   }
 
-  async sendEmail(to, subject, html, text = null) {
+  // FIXED: Main sendEmail method with proper parameter handling
+  async sendEmail(options) {
+    // Handle both object parameter and individual parameters
+    let to, subject, html, text;
+    
+    if (typeof options === 'object' && !Array.isArray(options)) {
+      // Called with object parameter: sendEmail({ to, subject, html, text })
+      ({ to, subject, html, text } = options);
+    } else {
+      // Called with individual parameters: sendEmail(to, subject, html, text)
+      // This is for backward compatibility
+      to = arguments[0];
+      subject = arguments[1];
+      html = arguments[2];
+      text = arguments[3];
+    }
+
     if (!this.isConfigured) {
       console.warn('Email service not configured, skipping email send');
       return { success: false, error: 'Email service not configured' };
@@ -80,12 +92,26 @@ class EmailService {
     try {
       const fromEmail = process.env.FROM_EMAIL || process.env.SMTP_USER;
       
+      // Ensure we have valid content
+      if (!html && !text) {
+        console.error('❌ Email send error: No content provided (both html and text are empty)');
+        return { 
+          success: false, 
+          error: 'No email content provided'
+        };
+      }
+      
+      // Generate text from HTML if text is not provided and html exists
+      if (!text && html) {
+        text = this.stripHtml(html);
+      }
+      
       const mailOptions = {
         from: `"ATU Alumni Network" <${fromEmail}>`,
         to: Array.isArray(to) ? to.join(', ') : to,
-        subject,
-        html,
-        text: text || this.stripHtml(html)
+        subject: subject || 'No Subject',
+        html: html || `<p>${text}</p>`, // Fallback to text wrapped in <p> if no HTML
+        text: text || this.stripHtml(html) || 'No content'
       };
 
       console.log(`📧 Sending email to ${to}...`);
@@ -111,7 +137,7 @@ class EmailService {
   async sendWelcomeEmail(user) {
     const subject = 'Welcome to ATU Alumni Network! 🎓';
     const html = this.getWelcomeEmailTemplate(user);
-    return this.sendEmail(user.email, subject, html);
+    return this.sendEmail({ to: user.email, subject, html });
   }
 
   // Email verification
@@ -119,7 +145,7 @@ class EmailService {
     const subject = 'Verify Your ATU Alumni Account';
     const verificationUrl = `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`;
     const html = this.getEmailVerificationTemplate(user, verificationUrl);
-    return this.sendEmail(user.email, subject, html);
+    return this.sendEmail({ to: user.email, subject, html });
   }
 
   // Password reset email
@@ -127,7 +153,7 @@ class EmailService {
     const subject = 'Reset Your ATU Alumni Password';
     const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`;
     const html = this.getPasswordResetTemplate(user, resetUrl);
-    return this.sendEmail(user.email, subject, html);
+    return this.sendEmail({ to: user.email, subject, html });
   }
 
   // Event reminder email
@@ -152,42 +178,42 @@ class EmailService {
         html = this.getEventReminderTemplate(user, event, 'upcoming');
     }
 
-    return this.sendEmail(user.email, subject, html);
+    return this.sendEmail({ to: user.email, subject, html });
   }
 
   // Job application notification
   async sendJobApplicationNotification(jobPoster, job, applicant) {
     const subject = `New Application for ${job.title} 💼`;
     const html = this.getJobApplicationNotificationTemplate(jobPoster, job, applicant);
-    return this.sendEmail(jobPoster.email, subject, html);
+    return this.sendEmail({ to: jobPoster.email, subject, html });
   }
 
   // Job application status update
   async sendJobApplicationStatusUpdate(applicant, job, status) {
     const subject = `Application Update: ${job.title}`;
     const html = this.getJobApplicationStatusTemplate(applicant, job, status);
-    return this.sendEmail(applicant.email, subject, html);
+    return this.sendEmail({ to: applicant.email, subject, html });
   }
 
   // Survey invitation
   async sendSurveyInvitation(user, survey) {
     const subject = `Your Input Needed: ${survey.title} 📋`;
     const html = this.getSurveyInvitationTemplate(user, survey);
-    return this.sendEmail(user.email, subject, html);
+    return this.sendEmail({ to: user.email, subject, html });
   }
 
   // Connection request notification
   async sendConnectionRequestNotification(recipient, requester) {
     const subject = `New Connection Request from ${requester.firstName} ${requester.lastName}`;
     const html = this.getConnectionRequestTemplate(recipient, requester);
-    return this.sendEmail(recipient.email, subject, html);
+    return this.sendEmail({ to: recipient.email, subject, html });
   }
 
   // Monthly newsletter
   async sendMonthlyNewsletter(user, newsletterData) {
     const subject = `ATU Alumni Monthly Update - ${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`;
     const html = this.getNewsletterTemplate(user, newsletterData);
-    return this.sendEmail(user.email, subject, html);
+    return this.sendEmail({ to: user.email, subject, html });
   }
 
   // Test email functionality
@@ -211,7 +237,7 @@ class EmailService {
       </div>
     `;
 
-    return this.sendEmail(to, subject, html);
+    return this.sendEmail({ to, subject, html });
   }
 
   // Email template methods
@@ -284,43 +310,130 @@ class EmailService {
   }
 
   getEmailVerificationTemplate(user, verificationUrl) {
-    return `<html>Email verification template</html>`;
+    return `
+      <html>
+        <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2>Verify Your Email</h2>
+          <p>Hi ${user.firstName},</p>
+          <p>Please click the link below to verify your email address:</p>
+          <a href="${verificationUrl}" style="display: inline-block; padding: 10px 20px; background: #1e3a8a; color: white; text-decoration: none; border-radius: 5px;">Verify Email</a>
+          <p>If you didn't create an account, please ignore this email.</p>
+        </body>
+      </html>
+    `;
   }
 
   getPasswordResetTemplate(user, resetUrl) {
-    return `<html>Password reset template</html>`;
+    return `
+      <html>
+        <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2>Password Reset Request</h2>
+          <p>Hi ${user.firstName},</p>
+          <p>You requested to reset your password. Click the link below:</p>
+          <a href="${resetUrl}" style="display: inline-block; padding: 10px 20px; background: #1e3a8a; color: white; text-decoration: none; border-radius: 5px;">Reset Password</a>
+          <p>If you didn't request this, please ignore this email.</p>
+        </body>
+      </html>
+    `;
   }
 
   getEventReminderTemplate(user, event, reminderType) {
-    return `<html>Event reminder template</html>`;
+    return `
+      <html>
+        <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2>Event Reminder: ${event.title}</h2>
+          <p>Hi ${user.firstName},</p>
+          <p>This is a reminder about the upcoming event: ${event.title}</p>
+          <p>Date: ${new Date(event.startDate).toLocaleDateString()}</p>
+          <p>Location: ${event.location || 'TBA'}</p>
+        </body>
+      </html>
+    `;
   }
 
   getEventConfirmationTemplate(user, event) {
-    return `<html>Event confirmation template</html>`;
+    return `
+      <html>
+        <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2>Registration Confirmed!</h2>
+          <p>Hi ${user.firstName},</p>
+          <p>Your registration for ${event.title} has been confirmed.</p>
+          <p>We look forward to seeing you there!</p>
+        </body>
+      </html>
+    `;
   }
 
   getJobApplicationNotificationTemplate(jobPoster, job, applicant) {
-    return `<html>Job application notification template</html>`;
+    return `
+      <html>
+        <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2>New Job Application</h2>
+          <p>Hi ${jobPoster.firstName},</p>
+          <p>You have received a new application for the position: ${job.title}</p>
+          <p>Applicant: ${applicant.firstName} ${applicant.lastName}</p>
+        </body>
+      </html>
+    `;
   }
 
   getJobApplicationStatusTemplate(applicant, job, status) {
-    return `<html>Job status template</html>`;
+    return `
+      <html>
+        <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2>Application Status Update</h2>
+          <p>Hi ${applicant.firstName},</p>
+          <p>Your application for ${job.title} has been updated.</p>
+          <p>Status: ${status}</p>
+        </body>
+      </html>
+    `;
   }
 
   getSurveyInvitationTemplate(user, survey) {
-    return `<html>Survey invitation template</html>`;
+    return `
+      <html>
+        <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2>Survey Invitation</h2>
+          <p>Hi ${user.firstName},</p>
+          <p>We'd love to hear your thoughts! Please take a moment to complete our survey:</p>
+          <h3>${survey.title}</h3>
+          <p>${survey.description || ''}</p>
+        </body>
+      </html>
+    `;
   }
 
   getConnectionRequestTemplate(recipient, requester) {
-    return `<html>Connection request template</html>`;
+    return `
+      <html>
+        <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2>New Connection Request</h2>
+          <p>Hi ${recipient.firstName},</p>
+          <p>${requester.firstName} ${requester.lastName} would like to connect with you on ATU Alumni Network.</p>
+        </body>
+      </html>
+    `;
   }
 
   getNewsletterTemplate(user, newsletterData) {
-    return `<html>Newsletter template</html>`;
+    return `
+      <html>
+        <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2>ATU Alumni Monthly Newsletter</h2>
+          <p>Hi ${user.firstName},</p>
+          <p>Here's your monthly update from the ATU Alumni Network.</p>
+        </body>
+      </html>
+    `;
   }
 
-  // Utility methods
+  // FIXED: Utility method with null check
   stripHtml(html) {
+    // Handle null, undefined, or non-string values
+    if (!html || typeof html !== 'string') {
+      return '';
+    }
     return html.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
   }
 

@@ -5,6 +5,10 @@ const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
 const path = require('path');
+const http = require('http');
+
+// Import Socket.io configuration
+const { initializeSocket } = require('./config/socket');
 
 // Import configurations (check if they exist first)
 let swaggerConfig;
@@ -20,6 +24,7 @@ const { connectMongoDB, connectRedis } = require('./config/database');
 
 // Import routes
 const apiRoutes = require('./routes/index.routes');
+const messagingRoutes = require('./routes/messaging.routes');
 
 // Check if new routes exist
 let notificationRoutes, searchRoutes;
@@ -38,30 +43,59 @@ try {
 }
 
 const app = express();
+const server = http.createServer(app);
+
+// Initialize Socket.io
+initializeSocket(server);
 
 // Trust proxy for rate limiting and IP detection
 app.set('trust proxy', 1);
 
-// CORS configuration
+// CORS configuration - FIXED FOR FLUTTER MOBILE APPS
 const corsOptions = {
   origin: function (origin, callback) {
     const allowedOrigins = [
       'http://localhost:3000',
       'http://localhost:3001', 
+      'http://localhost:4200', // Angular dev server
       'http://localhost:5173', // Vite dev server
       'https://atu-alumni.edu.gh',
       process.env.FRONTEND_URL
     ].filter(Boolean);
 
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
+    // Allow requests with no origin (mobile apps, Postman, etc.)
+    if (!origin) {
+      console.log('🔓 CORS: Allowing request with no origin (mobile app)');
+      return callback(null, true);
     }
+
+    // Allow if origin is in the allowed list
+    if (allowedOrigins.includes(origin)) {
+      console.log(`✅ CORS: Allowing origin: ${origin}`);
+      return callback(null, true);
+    }
+
+    // For development, be more permissive
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`⚠️ CORS: Allowing origin in development mode: ${origin}`);
+      return callback(null, true);
+    }
+
+    // Block the request
+    console.log(`❌ CORS: Blocking origin: ${origin}`);
+    callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+  methods: ['GET', 'POST', 'PUT', 'DELETE','PATCH', 'OPTIONS'],
+  allowedHeaders: [
+    'Content-Type', 
+    'Authorization', 
+    'X-Requested-With',
+    'Accept',
+    'Origin',
+    'Access-Control-Request-Method',
+    'Access-Control-Request-Headers'
+  ]
 };
 
 app.use(cors(corsOptions));
@@ -118,7 +152,8 @@ app.get('/health', (req, res) => {
       search: searchRoutes ? 'enabled' : 'disabled',
       emailService: process.env.SMTP_HOST ? 'enabled' : 'disabled',
       rateLimiting: process.env.NODE_ENV === 'development' ? 'disabled' : 'enabled',
-      apiDocs: swaggerConfig ? 'enabled' : 'disabled'
+      apiDocs: swaggerConfig ? 'enabled' : 'disabled',
+      realTimeMessaging: 'enabled'
     }
   });
 });
@@ -139,6 +174,10 @@ console.log('📁 Loading API routes...');
 
 // Mount API routes
 app.use('/api', apiRoutes);
+
+// Mount messaging routes
+app.use('/api/messaging', messagingRoutes);
+console.log('💬 Messaging routes loaded');
 
 // Mount optional routes if they exist
 if (notificationRoutes) {
@@ -252,8 +291,10 @@ const startServer = async () => {
       console.log('⚠️ Redis connection failed, continuing without cache:', redisError.message);
     }
     
-    const server = app.listen(PORT, () => {
+    // Use server.listen instead of app.listen
+    server.listen(PORT, () => {
       console.log(`🚀 ATU Alumni API server running on port ${PORT}`);
+      console.log(`💬 Socket.io server running`);
       console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
       console.log(`🔗 Health check: http://localhost:${PORT}/health`);
       
@@ -267,6 +308,7 @@ const startServer = async () => {
       console.log(`💼 Job endpoints: http://localhost:${PORT}/api/jobs`);
       console.log(`📋 Survey endpoints: http://localhost:${PORT}/api/surveys`);
       console.log(`📤 Upload endpoints: http://localhost:${PORT}/api/uploads`);
+      console.log(`💬 Messaging endpoints: http://localhost:${PORT}/api/messaging`);
       
       if (notificationRoutes) {
         console.log(`🔔 Notification endpoints: http://localhost:${PORT}/api/notifications`);
@@ -283,9 +325,11 @@ const startServer = async () => {
       console.log(`📧 Email Service: ${process.env.SMTP_HOST ? '✅ Configured' : '⚠️ Not configured'}`);
       console.log(`🛡️ Rate Limiting: ${process.env.NODE_ENV === 'development' ? '⚠️ Disabled (Dev)' : '✅ Enabled'}`);
       console.log(`📤 File Uploads: ✅ Enabled`);
+      console.log(`💬 Real-time Messaging: ✅ Enabled`);
       console.log(`🔔 Notifications: ${notificationRoutes ? '✅ Enabled' : '⚠️ Routes not found'}`);
       console.log(`🔍 Advanced Search: ${searchRoutes ? '✅ Enabled' : '⚠️ Routes not found'}`);
       console.log(`📖 API Documentation: ${swaggerConfig ? '✅ Available at /api-docs' : '⚠️ Config not found'}`);
+      console.log(`🔓 CORS: Configured for mobile apps and web clients`);
       
       console.log('\n🎉 Server started successfully!');
     });

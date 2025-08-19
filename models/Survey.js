@@ -78,7 +78,16 @@ const responseSchema = new mongoose.Schema({
   },
   respondent: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
+    ref: 'User',
+    // Make it explicitly optional
+    required: false,
+    default: null
+  },
+  
+  // Add a unique session ID for anonymous responses
+  sessionId: {
+    type: String,
+    required: false
   },
   
   responses: [{
@@ -93,13 +102,22 @@ const responseSchema = new mongoose.Schema({
   timestamps: true
 });
 
+// Indexes
 surveySchema.index({ status: 1 });
 surveySchema.index({ createdBy: 1 });
 surveySchema.index({ surveyType: 1 });
 
 responseSchema.index({ survey: 1 });
 responseSchema.index({ respondent: 1 });
-responseSchema.index({ survey: 1, respondent: 1 }, { unique: true });
+
+// IMPORTANT: Use a partial unique index that only applies when respondent is not null
+responseSchema.index(
+  { survey: 1, respondent: 1 }, 
+  { 
+    unique: true,
+    partialFilterExpression: { respondent: { $ne: null } }
+  }
+);
 
 module.exports = {
   Survey: mongoose.model('Survey', surveySchema),

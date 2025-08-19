@@ -220,5 +220,5 @@ async function seedData() {
   }
 }
 
-seedData();
-console.log("Script file ")
+//seedData();
+//console.log("Script file ")

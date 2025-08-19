@@ -11,6 +11,8 @@ const jobsRoutes = require('./jobs.routes');
 const surveysRoutes = require('./surveys.routes');
 const adminRoutes = require('./admin.routes');
 const uploadRoutes = require('./upload.routes');
+const forumRoutes = require('./forum.routes');
+const activitiesRoutes = require('./activities.routes'); // NEW
 
 // Import rate limiters
 const { generalLimiter, apiLimiter } = require('../middleware/rateLimiter');
@@ -77,6 +79,60 @@ router.get('/', (req, res) => {
         analytics: 'GET /api/surveys/:id/analytics (Admin)',
         responses: 'GET /api/surveys/:id/responses (Admin)'
       },
+      activities: { // NEW
+        myActivities: 'GET /api/activities/my-activities',
+        activityFeed: 'GET /api/activities/feed',
+        activityStats: 'GET /api/activities/stats',
+        userActivities: 'GET /api/activities/user/:userId',
+        createActivity: 'POST /api/activities',
+        deleteActivity: 'DELETE /api/activities/:activityId',
+        activityTypes: [
+          'profile_update',
+          'profile_view',
+          'connection_made',
+          'connection_request',
+          'event_registration',
+          'event_attendance',
+          'job_application',
+          'job_posted',
+          'forum_post',
+          'forum_comment',
+          'message_sent',
+          'survey_completed',
+          'achievement_earned',
+          'login',
+          'account_created'
+        ],
+        visibility: ['public', 'connections', 'private']
+      },
+      forums: {
+        // Forum management
+        listForums: 'GET /api/forums',
+        forumDetails: 'GET /api/forums/:id',
+        createForum: 'POST /api/forums (Admin)',
+        updateForum: 'PUT /api/forums/:id (Admin/Moderator)',
+        deleteForum: 'DELETE /api/forums/:id (Admin)',
+        
+        // Post management
+        listPosts: 'GET /api/forums/:forumId/posts',
+        postDetails: 'GET /api/forums/posts/:id',
+        createPost: 'POST /api/forums/:forumId/posts',
+        updatePost: 'PUT /api/forums/posts/:id',
+        deletePost: 'DELETE /api/forums/posts/:id',
+        likePost: 'POST /api/forums/posts/:id/like',
+        voteOnPoll: 'POST /api/forums/posts/:id/vote',
+        
+        // Reply management
+        listReplies: 'GET /api/forums/posts/:postId/replies',
+        createReply: 'POST /api/forums/posts/:postId/replies',
+        updateReply: 'PUT /api/forums/replies/:id',
+        deleteReply: 'DELETE /api/forums/replies/:id',
+        likeReply: 'POST /api/forums/replies/:id/like',
+        
+        // Search and discovery
+        searchPosts: 'GET /api/forums/search',
+        trendingPosts: 'GET /api/forums/trending'
+      },
       uploads: {
         profilePicture: 'POST /api/uploads/profile-picture',
         resume: 'POST /api/uploads/resume',
@@ -121,7 +177,9 @@ router.use('/alumni', apiLimiter, alumniRoutes);
 router.use('/events', apiLimiter, eventsRoutes);
 router.use('/jobs', apiLimiter, jobsRoutes);
 router.use('/surveys', apiLimiter, surveysRoutes);
+router.use('/forums', apiLimiter, forumRoutes);
 router.use('/uploads', apiLimiter, uploadRoutes);
+router.use('/activities', apiLimiter, activitiesRoutes); // NEW
 router.use('/admin', apiLimiter, adminRoutes);
 
 module.exports = router;

@@ -7,6 +7,7 @@ const { upload, handleUploadError } = require('../middleware/upload');
 const { uploadLimiter } = require('../middleware/rateLimiter');
 const User = require('../models/User');
 const Profile = require('../models/Profile');
+const Activity = require('../models/Activity'); // NEW
 
 const router = express.Router();
 
@@ -60,6 +61,7 @@ router.post('/profile-picture', [
     // Get current profile to delete old image
     let profile = await Profile.findOne({ user: userId });
     const oldImagePath = profile?.profilePicture;
+    const isFirstUpload = !oldImagePath;
 
     if (!profile) {
       profile = new Profile({ user: userId });
@@ -74,6 +76,28 @@ router.post('/profile-picture', [
     if (oldImagePath && oldImagePath !== fileUrl) {
       const oldPath = oldImagePath.replace(`${req.protocol}://${req.get('host')}/`, '');
       await deleteOldFile(oldPath);
+    }
+
+    // Create activity for profile picture upload - NEW
+    try {
+      await Activity.createActivity({
+        user: userId,
+        type: 'profile_update',
+        action: isFirstUpload ? 'Added profile picture' : 'Updated profile picture',
+        description: isFirstUpload ? 'added a profile picture' : 'updated their profile picture',
+        metadata: {
+          updateType: 'profile_picture',
+          fileName: req.file.filename,
+          fileSize: req.file.size,
+          mimetype: req.file.mimetype,
+          ipAddress: req.ip,
+          userAgent: req.get('user-agent')
+        },
+        visibility: 'public',
+        points: isFirstUpload ? 10 : 5
+      });
+    } catch (activityError) {
+      console.error('Failed to create profile picture activity:', activityError);
     }
 
     res.json({
@@ -124,6 +148,7 @@ router.post('/resume', [
     // Get current profile to delete old resume
     let profile = await Profile.findOne({ user: userId });
     const oldResumePath = profile?.resumeUrl;
+    const isFirstUpload = !oldResumePath;
 
     if (!profile) {
       profile = new Profile({ user: userId });
@@ -140,6 +165,28 @@ router.post('/resume', [
     if (oldResumePath && oldResumePath !== fileUrl) {
       const oldPath = oldResumePath.replace(`${req.protocol}://${req.get('host')}/`, '');
       await deleteOldFile(oldPath);
+    }
+
+    // Create activity for resume upload - NEW
+    try {
+      await Activity.createActivity({
+        user: userId,
+        type: 'profile_update',
+        action: isFirstUpload ? 'Uploaded resume' : 'Updated resume',
+        description: isFirstUpload ? 'uploaded their resume' : 'updated their resume',
+        metadata: {
+          updateType: 'resume',
+          fileName: req.file.originalname,
+          fileSize: req.file.size,
+          mimetype: req.file.mimetype,
+          ipAddress: req.ip,
+          userAgent: req.get('user-agent')
+        },
+        visibility: 'private', // Resumes are private
+        points: isFirstUpload ? 15 : 5
+      });
+    } catch (activityError) {
+      console.error('Failed to create resume upload activity:', activityError);
     }
 
     res.json({

@@ -1,0 +1,53 @@
+api/
+├── README.md
+├── app.js
+├── config/
+│   ├── database.js
+│   ├── socket.js
+│   └── swagger.js
+├── controllers/
+├── middleware/
+│   ├── auth.js
+│   ├── rateLimiter.js
+│   ├── upload.js
+│   └── validation.js
+├── models/
+│   ├── Chat.js
+│   ├── Event.js
+│   ├── Forum.js
+│   ├── Job.js
+│   ├── Message.js
+│   ├── Notification.js
+│   ├── Profile.js
+│   ├── Survey.js
+│   └── User.js
+├── node_api_structure.txt
+├── node_structure.txt
+├── package-lock.json
+├── package.json
+├── routes/
+│   ├── admin.routes.js
+│   ├── alumni.routes.js
+│   ├── auth.routes.js
+│   ├── events.routes.js
+│   ├── index.routes.js
+│   ├── jobs.routes.js
+│   ├── messaging.routes.js
+│   ├── notifications.routes.js
+│   ├── search.routes.js
+│   ├── surveys.routes.js
+│   └── upload.routes.js
+├── scripts/
+│   ├── seedData.js
+│   ├── testEmail.js
+│   └── testSingleEmail.js
+├── services/
+│   ├── emailService.js
+│   └── notificationService.js
+├── tests/
+├── uploads/
+│   ├── events/
+│   ├── misc/
+│   ├── profiles/
+│   └── resumes/
+└── utils/

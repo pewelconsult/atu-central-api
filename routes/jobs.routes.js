@@ -1,5 +1,6 @@
 const express = require('express');
 const Job = require('../models/Job');
+const Activity = require('../models/Activity'); // NEW
 const { auth, optionalAuth } = require('../middleware/auth');
 const { validateJob, validatePagination } = require('../middleware/validation');
 const { cache } = require('../config/database');
@@ -154,6 +155,29 @@ router.post('/', [auth, validateJob], async (req, res) => {
     const job = new Job(jobData);
     await job.save();
 
+    // Create activity for job posting - NEW
+    try {
+      await Activity.createActivity({
+        user: req.user._id || req.user.id,
+        type: 'job_posted',
+        action: `Posted job: ${job.title}`,
+        description: `posted a new job opportunity: <strong>${job.title}</strong> at <strong>${job.company}</strong>`,
+        metadata: {
+          targetJob: job._id,
+          jobTitle: job.title,
+          company: job.company,
+          employmentType: job.employmentType,
+          location: job.location,
+          ipAddress: req.ip,
+          userAgent: req.get('user-agent')
+        },
+        visibility: 'public',
+        points: 15
+      });
+    } catch (activityError) {
+      console.error('Failed to create job posting activity:', activityError);
+    }
+
     // Clear jobs cache
     await cache.del('jobs:*');
 
@@ -220,7 +244,8 @@ router.post('/:id/apply', auth, async (req, res) => {
     const userId = req.user._id || req.user.id;
     const { coverLetter, resumeUrl } = req.body;
     
-    const job = await Job.findById(req.params.id);
+    const job = await Job.findById(req.params.id)
+      .populate('postedBy', 'firstName lastName');
 
     if (!job) {
       return res.status(404).json({
@@ -264,9 +289,50 @@ router.post('/:id/apply', auth, async (req, res) => {
 
     await job.save();
 
+    // Create activity for job application - NEW
+    try {
+      await Activity.createActivity({
+        user: userId,
+        type: 'job_application',
+        action: `Applied to ${job.title} at ${job.company}`,
+        description: `applied to <strong>${job.title}</strong> at <strong>${job.company}</strong>`,
+        metadata: {
+          targetJob: job._id,
+          jobTitle: job.title,
+          company: job.company,
+          jobPosterId: job.postedBy._id,
+          ipAddress: req.ip,
+          userAgent: req.get('user-agent')
+        },
+        visibility: 'private', // Private since job applications are sensitive
+        points: 20
+      });
+
+      // Notify job poster about new application
+      if (job.postedBy._id.toString() !== userId.toString()) {
+        await Activity.createActivity({
+          user: job.postedBy._id,
+          type: 'job_application_received',
+          action: `New application for ${job.title}`,
+          description: `received a new application for <strong>${job.title}</strong>`,
+          metadata: {
+            targetJob: job._id,
+            applicantId: userId,
+            applicantName: `${req.user.firstName} ${req.user.lastName}`
+          },
+          visibility: 'private',
+          points: 0,
+          isSystemGenerated: true
+        });
+      }
+    } catch (activityError) {
+      console.error('Failed to create job application activity:', activityError);
+    }
+
     res.json({
       success: true,
-      message: 'Application submitted successfully'
+      message: 'Application submitted successfully',
+      data: { job }
     });
 
   } catch (error) {
@@ -287,7 +353,7 @@ router.get('/me/applications', auth, async (req, res) => {
       'applications.applicant': userId
     })
     .populate('postedBy', 'firstName lastName')
-    .select('title company location employmentType applications.$ applications.status applications.appliedAt');
+    .select('title company location employmentType applications.$'); // Remove the conflicting field selections
 
     const applications = jobs.map(job => ({
       job: {
@@ -351,7 +417,8 @@ router.put('/:id/applications/:applicationId', auth, async (req, res) => {
       });
     }
 
-    const job = await Job.findById(req.params.id);
+    const job = await Job.findById(req.params.id)
+      .populate('applications.applicant', 'firstName lastName email');
 
     if (!job) {
       return res.status(404).json({
@@ -376,12 +443,43 @@ router.put('/:id/applications/:applicationId', auth, async (req, res) => {
       });
     }
 
+    const previousStatus = application.status;
     application.status = status;
     await job.save();
 
+    // Create activity for application status change - NEW
+    if (previousStatus !== status) {
+      try {
+        // Activity for the applicant
+        await Activity.createActivity({
+          user: application.applicant._id,
+          type: 'job_application_status_changed',
+          action: `Application status updated for ${job.title}`,
+          description: `application for <strong>${job.title}</strong> at <strong>${job.company}</strong> was ${status === 'accepted' ? '<strong>accepted</strong>' : status === 'rejected' ? '<strong>rejected</strong>' : `updated to <strong>${status}</strong>`}`,
+          metadata: {
+            targetJob: job._id,
+            jobTitle: job.title,
+            company: job.company,
+            previousStatus,
+            newStatus: status
+          },
+          visibility: 'private',
+          points: status === 'accepted' ? 50 : 0,
+          isSystemGenerated: true
+        });
+      } catch (activityError) {
+        console.error('Failed to create application status activity:', activityError);
+      }
+    }
+
     res.json({
       success: true,
-      message: 'Application status updated successfully'
+      message: 'Application status updated successfully',
+      data: {
+        applicationId: application._id,
+        status: application.status,
+        applicant: application.applicant
+      }
     });
 
   } catch (error) {
@@ -389,6 +487,250 @@ router.put('/:id/applications/:applicationId', auth, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to update application status'
+    });
+  }
+});
+
+// Add this DELETE endpoint to your jobs route file (after the Update job endpoint)
+
+// Delete job
+router.delete('/:id', auth, async (req, res) => {
+  try {
+    const userId = req.user._id || req.user.id;
+    const job = await Job.findById(req.params.id);
+
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        message: 'Job not found'
+      });
+    }
+
+    // Check if user is job poster or admin
+    if (job.postedBy.toString() !== userId.toString() && req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized to delete this job'
+      });
+    }
+
+    // Store job info for activity before deletion
+    const jobTitle = job.title;
+    const jobCompany = job.company;
+
+    // Delete the job
+    await Job.findByIdAndDelete(req.params.id);
+
+    // Create activity for job deletion
+    try {
+      await Activity.createActivity({
+        user: userId,
+        type: 'job_deleted',
+        action: `Deleted job: ${jobTitle}`,
+        description: `deleted the job posting for <strong>${jobTitle}</strong> at <strong>${jobCompany}</strong>`,
+        metadata: {
+          deletedJobId: req.params.id,
+          jobTitle: jobTitle,
+          company: jobCompany,
+          deletedBy: req.user.role === 'admin' ? 'admin' : 'poster',
+          ipAddress: req.ip,
+          userAgent: req.get('user-agent')
+        },
+        visibility: 'private',
+        points: 0
+      });
+    } catch (activityError) {
+      console.error('Failed to create job deletion activity:', activityError);
+    }
+
+    // Clear cache
+    await cache.del('jobs:*');
+
+    res.json({
+      success: true,
+      message: 'Job deleted successfully'
+    });
+
+  } catch (error) {
+    console.error('Delete job error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete job'
+    });
+  }
+});
+
+// Update job status (for admins) - Add this if you want to support status updates
+router.patch('/:id/status', auth, async (req, res) => {
+  try {
+    const { status } = req.body;
+    const userId = req.user._id || req.user.id;
+
+    // Validate status
+    const validStatuses = ['active', 'pending', 'expired', 'rejected', 'closed'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid status value'
+      });
+    }
+
+    const job = await Job.findById(req.params.id);
+
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        message: 'Job not found'
+      });
+    }
+
+    // Check if user is job poster or admin
+    if (job.postedBy.toString() !== userId.toString() && req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized to update job status'
+      });
+    }
+
+    const previousStatus = job.status;
+    job.status = status;
+    await job.save();
+
+    // Create activity for status change
+    if (previousStatus !== status) {
+      try {
+        await Activity.createActivity({
+          user: userId,
+          type: 'job_status_changed',
+          action: `Changed job status to ${status}`,
+          description: `changed status of <strong>${job.title}</strong> from ${previousStatus} to <strong>${status}</strong>`,
+          metadata: {
+            targetJob: job._id,
+            jobTitle: job.title,
+            company: job.company,
+            previousStatus,
+            newStatus: status,
+            changedBy: req.user.role === 'admin' ? 'admin' : 'poster'
+          },
+          visibility: 'private',
+          points: 0
+        });
+      } catch (activityError) {
+        console.error('Failed to create job status activity:', activityError);
+      }
+    }
+
+    // Clear cache
+    await cache.del('jobs:*');
+
+    res.json({
+      success: true,
+      message: 'Job status updated successfully',
+      data: job
+    });
+
+  } catch (error) {
+    console.error('Update job status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update job status'
+    });
+  }
+});
+
+// Bulk operations for admin
+router.post('/bulk', auth, async (req, res) => {
+  try {
+    const { action, jobIds } = req.body;
+
+    // Check if user is admin
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Admin access required'
+      });
+    }
+
+    if (!action || !jobIds || !Array.isArray(jobIds) || jobIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid request data'
+      });
+    }
+
+    let result;
+    const userId = req.user._id || req.user.id;
+
+    switch (action) {
+      case 'delete':
+        result = await Job.deleteMany({ _id: { $in: jobIds } });
+        
+        // Create activity for bulk deletion
+        try {
+          await Activity.createActivity({
+            user: userId,
+            type: 'jobs_bulk_deleted',
+            action: `Deleted ${result.deletedCount} jobs`,
+            description: `performed bulk deletion of <strong>${result.deletedCount}</strong> job postings`,
+            metadata: {
+              deletedJobIds: jobIds,
+              deletedCount: result.deletedCount,
+              ipAddress: req.ip,
+              userAgent: req.get('user-agent')
+            },
+            visibility: 'admin',
+            points: 0,
+            isSystemGenerated: true
+          });
+        } catch (activityError) {
+          console.error('Failed to create bulk deletion activity:', activityError);
+        }
+        break;
+
+      case 'approve':
+        result = await Job.updateMany(
+          { _id: { $in: jobIds }, status: 'pending' },
+          { $set: { status: 'active' } }
+        );
+        break;
+
+      case 'reject':
+        result = await Job.updateMany(
+          { _id: { $in: jobIds }, status: 'pending' },
+          { $set: { status: 'rejected' } }
+        );
+        break;
+
+      case 'close':
+        result = await Job.updateMany(
+          { _id: { $in: jobIds } },
+          { $set: { status: 'closed' } }
+        );
+        break;
+
+      default:
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid action'
+        });
+    }
+
+    // Clear cache
+    await cache.del('jobs:*');
+
+    res.json({
+      success: true,
+      message: `Bulk ${action} completed successfully`,
+      data: {
+        modifiedCount: result.modifiedCount || result.deletedCount || 0
+      }
+    });
+
+  } catch (error) {
+    console.error('Bulk operation error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to perform bulk operation'
     });
   }
 });

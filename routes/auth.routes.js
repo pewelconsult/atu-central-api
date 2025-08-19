@@ -3,12 +3,28 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const User = require('../models/User');
+const Profile = require('../models/Profile');
+const Activity = require('../models/Activity'); // NEW
 const { auth } = require('../middleware/auth');
 const { validateRegister, validateLogin } = require('../middleware/validation');
 const { authLimiter } = require('../middleware/rateLimiter');
 const emailService = require('../services/emailService');
 
 const router = express.Router();
+
+// Helper function to update last active time
+const updateLastActive = async (userId) => {
+  try {
+    await Profile.findOneAndUpdate(
+      { user: userId },
+      { lastActiveAt: new Date() },
+      { upsert: true } // Create profile if it doesn't exist
+    );
+  } catch (error) {
+    console.error('Error updating lastActiveAt:', error);
+    // Don't throw error to avoid breaking login flow
+  }
+};
 
 // Generate JWT tokens
 const generateTokens = (userId) => {
@@ -53,6 +69,30 @@ router.post('/register', [authLimiter, validateRegister], async (req, res) => {
 
     // Generate tokens
     const tokens = generateTokens(user._id);
+
+    // Create account creation activity - NEW
+    // routes/auth.routes.js - Fix the activity creation
+// Create login activity - NEW
+try {
+  await Activity.createActivity({
+    user: user._id,
+    type: 'login',
+    action: 'Logged into the platform',
+    description: 'logged in',
+    metadata: {
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent')
+      // Remove the location field that's causing the error
+      // location: req.headers['x-forwarded-for'] || req.ip  // <-- REMOVE THIS LINE
+    },
+    visibility: 'private',
+    points: 1,
+    isSystemGenerated: true
+  });
+} catch (activityError) {
+  console.error('Failed to create login activity:', activityError);
+  // Don't let activity errors break the login flow
+}
 
     // Send welcome email (non-blocking)
     emailService.sendWelcomeEmail(user).catch(err => 
@@ -145,6 +185,29 @@ router.post('/login', [authLimiter, validateLogin], async (req, res) => {
     user.lastLoginAt = new Date();
     await user.save();
 
+    // Update profile last active
+    await updateLastActive(user._id);
+
+    // Create login activity - NEW
+    try {
+      await Activity.createActivity({
+        user: user._id,
+        type: 'login',
+        action: 'Logged into the platform',
+        description: 'logged in',
+        metadata: {
+          ipAddress: req.ip,
+          userAgent: req.get('user-agent'),
+          location: req.headers['x-forwarded-for'] || req.ip
+        },
+        visibility: 'private',
+        points: 1,
+        isSystemGenerated: true
+      });
+    } catch (activityError) {
+      console.error('Failed to create login activity:', activityError);
+    }
+
     // Generate tokens
     const tokens = generateTokens(user._id);
 
@@ -196,6 +259,9 @@ router.get('/me', auth, async (req, res) => {
         message: 'User not found'
       });
     }
+
+    // Update last active when user checks their profile
+    await updateLastActive(user._id);
 
     res.json({
       success: true,
